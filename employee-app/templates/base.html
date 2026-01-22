@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HR Directory</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        
+        /* Custom Animations */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in {
+            animation: fadeIn 0.5s ease-out forwards;
+        }
+
+        .stagger-1 { animation-delay: 100ms; }
+        .stagger-2 { animation-delay: 200ms; }
+        .stagger-3 { animation-delay: 300ms; }
+    </style>
+</head>
+<body class="text-gray-800">
+    
+    <!-- Navigation -->
+    <nav class="bg-indigo-600 shadow-lg text-white">
+        <div class="max-w-6xl mx-auto px-4">
+            <div class="flex justify-between">
+                <div class="flex space-x-7">
+                    <a href="{{ url_for('index') }}" class="flex items-center py-4 px-2">
+                        <span class="font-bold text-xl tracking-tight">🏢 NexusCorp HR</span>
+                    </a>
+                </div>
+                <div class="flex items-center space-x-3">
+                    <a href="{{ url_for('hire') }}" class="py-2 px-4 bg-white text-indigo-600 rounded hover:bg-indigo-50 transition duration-300 font-semibold shadow">
+                        + Hire New
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Flash Messages -->
+    <div class="max-w-6xl mx-auto px-4 mt-4">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                <div class="p-4 mb-4 text-sm rounded-lg animate-fade-in shadow-sm
+                    {% if category == 'error' %} bg-red-100 text-red-700 
+                    {% elif category == 'warning' %} bg-yellow-100 text-yellow-700 
+                    {% else %} bg-green-100 text-green-700 {% endif %}" role="alert">
+                    <span class="font-medium">{{ category|upper }}:</span> {{ message }}
+                </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+    </div>
+
+    <!-- Main Content -->
+    <div class="max-w-6xl mx-auto px-4 py-6">
+        {% block content %}{% endblock %}
+    </div>
+
+</body>
+</html>
