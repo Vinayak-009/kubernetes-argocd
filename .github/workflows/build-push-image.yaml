@@ -1,41 +1,85 @@
-name: Build, Push and Update Manifest
+name: Robust DevSecOps Pipeline
 
 on:
   push:
     branches:
       - main
     paths:
-      - 'employee-app/**' # Only trigger if files in your app folder change
+      - 'employee-app/**' # Trigger on changes in the app folder
 
 permissions:
-  contents: write # Required to push the updated yaml back to the repo
+  contents: write # Required for GitOps commit
 
 jobs:
-  build-and-push:
+  secure-build-deploy:
     runs-on: ubuntu-latest
-    
+    defaults:
+      run:
+        working-directory: ./employee-app # Default context for commands
+
     steps:
+    # --- PHASE 1: INITIALIZATION ---
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Required for TruffleHog to scan history
 
-    # Create a 4-character Short SHA
     - name: Generate Short SHA
       run: echo "SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-4)" >> $GITHUB_ENV
 
+    # --- PHASE 2: SECRET SCANNING (TruffleHog) ---
+    - name: Run TruffleHog (Secret Scan)
+      uses: trufflesecurity/trufflehog@v3.1
+      with:
+        path: ./
+        base: ${{ github.event.before }}
+        head: ${{ github.sha }}
+        extra_args: --debug --only-verified
+      # This step will FAIL if it finds valid credentials in your commits
+
+    # --- PHASE 3: INFRASTRUCTURE SCANNING (Checkov) ---
+    - name: Run Checkov (IaC Scan)
+      uses: bridgecrewio/checkov-action@master
+      with:
+        directory: employee-app/
+        framework: kubernetes,dockerfile
+        # Set soft_fail: true if you want to see errors but NOT stop the build
+        soft_fail: false 
+        quiet: true # Only show failed checks
+
+    # --- PHASE 4: BUILD & CONTAINER SCANNING (Trivy) ---
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    # Build locally (don't push yet) to scan the artifact
+    - name: Build local image for scanning
+      uses: docker/build-push-action@v5
+      with:
+        context: ./employee-app
+        load: true # Import into local Docker engine
+        tags: local-scan-image:${{ env.SHORT_SHA }}
+
+    - name: Run Trivy (Container Scan)
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'local-scan-image:${{ env.SHORT_SHA }}'
+        format: 'table'
+        exit-code: '1' # FAIL the pipeline if vulnerabilities are found
+        ignore-unfixed: true
+        vuln-type: 'os,library'
+        severity: 'CRITICAL,HIGH'
+
+    # --- PHASE 5: DELIVERY (GitOps) ---
     - name: Log in to Docker Hub
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Build and push Docker image
+    - name: Push Docker image
       uses: docker/build-push-action@v5
       with:
-        context: ./employee-app        # <--- IMPORTANT: Your files are in this subfolder
-        file: ./employee-app/Dockerfile
+        context: ./employee-app
         push: true
         tags: |
           ${{ secrets.DOCKERHUB_USERNAME }}/employee-app:latest
@@ -43,16 +87,13 @@ jobs:
 
     - name: Update Kubernetes Manifest
       run: |
-        # Target the deploy.yaml INSIDE the employee-app folder
-        # Replace image tag with the 4-char SHORT_SHA
-        sed -i "s|image: .*|image: ${{ secrets.DOCKERHUB_USERNAME }}/employee-app:${{ env.SHORT_SHA }}|g" employee-app/deploy.yaml
+        sed -i "s|image: .*|image: ${{ secrets.DOCKERHUB_USERNAME }}/employee-app:${{ env.SHORT_SHA }}|g" deploy.yaml
         
-        # Check for changes and push
         if [[ -n $(git status -s) ]]; then
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
-          git add employee-app/deploy.yaml
-          git commit -m "Update image tag to ${{ env.SHORT_SHA }}"
+          git add deploy.yaml
+          git commit -m "SecOps: Update image to ${{ env.SHORT_SHA }}"
           git push
         else
           echo "No changes to deploy.yaml"
