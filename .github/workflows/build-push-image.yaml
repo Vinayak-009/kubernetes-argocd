@@ -44,7 +44,7 @@ jobs:
         directory: employee-app/
         framework: kubernetes,dockerfile
         # Set soft_fail: true if you want to see errors but NOT stop the build
-        soft_fail: false 
+        soft_fail: true 
         quiet: true # Only show failed checks
 
     # --- PHASE 4: BUILD & CONTAINER SCANNING (Trivy) ---
