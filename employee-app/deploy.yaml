@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: my-app
-        image: gcr.io/kubernetes-482115/employee-app:v1
+        image: vinayak1629/employee-app:906b
         imagePullPolicy: Always
         env:
         - name: DB_USERNAME
