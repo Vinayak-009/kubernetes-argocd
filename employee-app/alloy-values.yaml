@@ -78,14 +78,20 @@ alloy:
           replacement   = "$1:8080"
           target_label  = "__address__"
         }
-        // Add labels
+        // Add Namespace Label
         rule {
           source_labels = ["__meta_kubernetes_namespace"]
           target_label  = "namespace"
         }
+        // Add Pod Name Label
         rule {
           source_labels = ["__meta_kubernetes_pod_name"]
           target_label  = "pod"
+        }
+        // <--- CRITICAL FIX: Add App Name Label for Dashboard Dropdowns --->
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          target_label  = "app"
         }
       }
 
