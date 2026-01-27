@@ -1,0 +1,140 @@
+alloy:
+  configMap:
+    content: |
+      // =================================================================
+      // 1. LOGGING PIPELINE (Loki)
+      // =================================================================
+      
+      // Discover pods
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // Add Metadata (Namespace, Pod, Container)
+      discovery.relabel "pod_logs" {
+        targets = discovery.kubernetes.pods.targets
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        // Filter: Match your app specifically
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          regex         = "my-app"
+          action        = "keep"
+        }
+      }
+
+      // Collect Logs
+      loki.source.kubernetes "pod_logs_source" {
+        targets    = discovery.relabel.pod_logs.output
+        forward_to = [loki.process.severity_filter.receiver]
+      }
+
+      // FILTER: Only keep Critical, Error, High logs
+      loki.process "severity_filter" {
+        forward_to = [loki.write.default.receiver]
+
+        stage.match {
+          // Drop if line DOES NOT contain these words (Case Insensitive)
+          selector = "{namespace!=\"monitoring\"} !~ \"(?i)(ERROR|CRITICAL|FATAL|SEVERE|HIGH)\""
+          action   = "drop" 
+        }
+      }
+
+      // Send to Loki
+      loki.write "default" {
+        endpoint {
+          url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+        }
+      }
+
+      // =================================================================
+      // 2. APP METRICS PIPELINE (Flask)
+      // =================================================================
+
+      discovery.relabel "flask_app" {
+        targets = discovery.kubernetes.pods.targets
+        
+        // Filter for your app
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          regex         = "my-app" 
+          action        = "keep"
+        }
+        // Force port 8080 (Where Flask/Gunicorn runs)
+        rule {
+          source_labels = ["__address__"]
+          action        = "replace"
+          regex         = "([^:]+)(?::\\d+)?"
+          replacement   = "$1:8080"
+          target_label  = "__address__"
+        }
+        // Add labels
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+      }
+
+      prometheus.scrape "flask_scrape" {
+        targets    = discovery.relabel.flask_app.output
+        forward_to = [prometheus.remote_write.default.receiver]
+        job_name   = "flask-app"
+      }
+
+      // =================================================================
+      // 3. CONTAINER METRICS (CPU/RAM)
+      // =================================================================
+      
+      discovery.kubernetes "nodes" {
+        role = "node"
+      }
+      
+      // Scrape cAdvisor from Kubelet (Port 10250)
+      discovery.relabel "cadvisor" {
+        targets = discovery.kubernetes.nodes.targets
+        rule {
+          action = "replace"
+          source_labels = ["__meta_kubernetes_node_address_InternalIP"]
+          target_label  = "__address__"
+          replacement   = "$1:10250"
+        }
+      }
+
+      prometheus.scrape "cadvisor" {
+        targets = discovery.relabel.cadvisor.output
+        scheme  = "https"
+        metrics_path = "/metrics/cadvisor"
+        
+        tls_config {
+            ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+            insecure_skip_verify = true
+        }
+        bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        
+        forward_to = [prometheus.remote_write.default.receiver]
+      }
+
+      // =================================================================
+      // 4. REMOTE WRITE (Send to Kube-Stack Prometheus)
+      // =================================================================
+      
+      prometheus.remote_write "default" {
+        endpoint {
+          // This points to the Kube-Prometheus-Stack we installed
+          url = "http://kube-stack-prometheus-prometheus.monitoring.svc.cluster.local:9090/api/v1/write"
+        }
+      }
