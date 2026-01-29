@@ -11,6 +11,7 @@ alloy:
       discovery.relabel "pod_logs" {
         targets = discovery.kubernetes.pods.targets
         
+        // Labeling for Grafana
         rule {
           source_labels = ["__meta_kubernetes_namespace"]
           target_label  = "namespace"
@@ -23,11 +24,10 @@ alloy:
           source_labels = ["__meta_kubernetes_pod_container_name"]
           target_label  = "container"
         }
-        // Match your app 'my-app'
+        // Capture the app label so the dashboard filter works
         rule {
           source_labels = ["__meta_kubernetes_pod_label_app"]
-          regex         = "my-app"
-          action        = "keep"
+          target_label  = "app"
         }
       }
 
@@ -38,57 +38,27 @@ alloy:
 
       loki.process "severity_filter" {
         forward_to = [loki.write.default.receiver]
-        stage.match {
-          // Drop non-severe logs to save space
-          selector = "{namespace!=\"monitoring\"} !~ \"(?i)(ERROR|CRITICAL|FATAL|SEVERE|HIGH)\""
-          action   = "drop" 
-        }
+        // TEMPORARILY REMOVED THE DROP FILTER TO ENSURE DATA FLOWS
+        // We will add it back once we see logs in Grafana
       }
 
       loki.write "default" {
         endpoint {
-          url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+          // Simplified URL
+          url = "http://loki.monitoring:3100/loki/api/v1/push"
         }
       }
 
       // =================================================================
-      // 2. FLASK APP SCRAPER (The "my-app" Logic)
+      // 2. METRICS PIPELINE (App & Infrastructure)
       // =================================================================
       discovery.relabel "flask_app" {
         targets = discovery.kubernetes.pods.targets
-        
-        // 1. Keep only my-app
-        rule {
-          source_labels = ["__meta_kubernetes_pod_label_app"]
-          regex         = "my-app" 
-          action        = "keep"
-        }
-        
-        // 2. Force Port 8080 (Critical for connection)
-        rule {
-          source_labels = ["__address__"]
-          action        = "replace"
-          regex         = "([^:]+)(?::\\d+)?"
-          replacement   = "$1:8080"
-          target_label  = "__address__"
-        }
-        
-        // 3. Add Namespace & Pod labels
-        rule {
-          source_labels = ["__meta_kubernetes_namespace"]
-          target_label  = "namespace"
-        }
-        rule {
-          source_labels = ["__meta_kubernetes_pod_name"]
-          target_label  = "pod"
-        }
-
-        // 4. FORCE 'app' LABEL (Fixes the Empty Dropdown)
-        rule {
-          action       = "replace"
-          replacement  = "my-app"
-          target_label = "app"
-        }
+        rule { source_labels = ["__meta_kubernetes_pod_label_app"]; regex = "my-app"; action = "keep" }
+        rule { source_labels = ["__address__"]; action = "replace"; regex = "([^:]+)(?::\\d+)?"; replacement = "$1:8080"; target_label = "__address__" }
+        rule { source_labels = ["__meta_kubernetes_namespace"]; target_label = "namespace" }
+        rule { source_labels = ["__meta_kubernetes_pod_name"]; target_label = "pod" }
+        rule { action = "replace"; replacement = "my-app"; target_label = "app" }
       }
 
       prometheus.scrape "flask_scrape" {
@@ -97,44 +67,23 @@ alloy:
         job_name   = "flask-app"
       }
 
-      // =================================================================
-      // 3. INFRASTRUCTURE SCRAPER (CPU, Memory, Pod Status)
-      // =================================================================
-      discovery.kubernetes "nodes" {
-        role = "node"
-      }
-      
-      // Scrape Kubelet cAdvisor (This gives CPU/Memory data)
+      discovery.kubernetes "nodes" { role = "node" }
       discovery.relabel "cadvisor" {
         targets = discovery.kubernetes.nodes.targets
-        rule {
-          action = "replace"
-          source_labels = ["__meta_kubernetes_node_address_InternalIP"]
-          target_label  = "__address__"
-          replacement   = "$1:10250"
-        }
+        rule { action = "replace"; source_labels = ["__meta_kubernetes_node_address_InternalIP"]; target_label = "__address__"; replacement = "$1:10250" }
       }
 
       prometheus.scrape "cadvisor" {
         targets = discovery.relabel.cadvisor.output
         scheme  = "https"
         metrics_path = "/metrics/cadvisor"
-        
-        tls_config {
-            ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-            insecure_skip_verify = true
-        }
+        tls_config { ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"; insecure_skip_verify = true }
         bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-        
         forward_to = [prometheus.remote_write.default.receiver]
-        job_name   = "cadvisor"
       }
 
-      // =================================================================
-      // 4. REMOTE WRITE DESTINATION
-      // =================================================================
       prometheus.remote_write "default" {
         endpoint {
-          url = "http://kube-stack-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090/api/v1/write"
+          url = "http://kube-stack-kube-prometheus-prometheus.monitoring:9090/api/v1/write"
         }
       }
