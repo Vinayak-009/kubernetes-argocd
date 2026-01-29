@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: my-app
-        image: vinayak1629/employee-app:4356
+        image: vinayak1629/employee-app:b0a0
         imagePullPolicy: Always
         env:
         - name: DB_USERNAME
